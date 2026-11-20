@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>KelvinK</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" />
+<link rel="stylesheet" href="styles.css" />
+<script src="data_materials.js"></script>
+<script src="ashby.js"></script>
+<script src="data_weather.js"></script>
+<script src="engine.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">K</span>
+      <div class="brand-text">
+        <h1>KelvinK</h1>
+        <p>ThermalSim results, without the file-diving</p>
+      </div>
+    </div>
+    <div class="case-switch" id="caseSwitch" hidden>
+      <span class="case-pill" id="casePill">—</span>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- EMPTY STATE -->
+    <section class="landing" id="dropzone">
+
+      <div class="run-card">
+        <h2>Run material selection</h2>
+        <p class="run-sub">
+          Runs ThermalSim's actual pipeline, right here in the browser — the same
+          2D concentric-ring grid, explicit solver, and ranking algorithm, ported
+          function-for-function from the current MATLAB source (see <a href="#" id="howLink">how</a>).
+          The configuration dialog below mirrors <code>GUIConfig.m</code>'s own tabs and defaults exactly.
+        </p>
+        <button class="btn btn-primary btn-wide" id="openConfigBtn">Configure &amp; Run…</button>
+        <div class="run-status" id="runStatus" hidden></div>
+      </div>
+
+      <div class="dropzone-secondary" id="dropzoneSecondary">
+        <p class="divider-text">— or —</p>
+        <div class="dropzone-inner">
+          <h3>Load a MATLAB result</h3>
+          <p>Drop a ThermalSim <code>optimization_results.csv</code> here, or click to browse.</p>
+          <input type="file" id="fileInput" accept=".csv" hidden />
+          <button class="btn btn-ghost btn-small" id="browseBtn">Choose file</button>
+          <button class="btn btn-ghost btn-small" id="sampleBtn">Load example data</button>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- HOW IT WORKS -->
+    <dialog id="howDialog">
+      <h3>What's actually running here</h3>
+      <ul>
+        <li><b>This is the real 2D model, ported exactly:</b> the same concentric-ring
+          geometry (<code>ringGeometry.m</code>/<code>RegionMap.m</code> — outer wall,
+          inner wall, cavity, in the exact proportions from <code>setup.txt</code>),
+          the same explicit forward-Euler solver with Robin (convective) exterior
+          boundaries and an adiabatic floor (<code>PDESolver.m</code>), the same
+          CFL-based grid-shrink check per experiment (<code>PDEEngine.m</code>),
+          the same Gaussian kiln heat source, the same metric formulas and the same
+          upgraded ranking algorithm — graded constraint violation, feasible-only
+          normalization, Pareto flagging, <code>-999</code> infeasible sentinel
+          (<code>RankingEngine.m</code>) — all run against the real 58-material
+          database (with the <code>FAMILY</code> field, including the "Quick Select
+          Family" filter) and real NASA POWER Ibadan weather data.</li>
+        <li><b>Stage 1 Ashby pre-screening is new, and also real:</b> before any
+          2D simulation runs, pick an Ashby performance-index preset (e.g.
+          "Passive Cooling Outer Wall, 1/α") and a Top-N count, and the Materials
+          tab ranks the <i>entire</i> 58-material pool by that index, checks only
+          the top candidates, and plots them on a log-log chart against the rest —
+          ported from <code>AshbyScreening.m</code>'s five index formulas, exactly
+          as the current MATLAB code computes them (<code>ashby.js</code>).</li>
+        <li><b>A bug this project used to faithfully reproduce has since been fixed
+          upstream, and KelvinK now matches the fix:</b> an earlier MATLAB version's
+          <code>cavityMask</code> selected region ID 2 ("Inner Wall") instead of ID 3
+          ("Cavity"), so every metric described the wall's temperature, not the
+          room's — a 44°C vs. 308°C difference in one check. The current MATLAB
+          code looks the cavity up by region <i>name</i> instead
+          (<code>tbl.regionID(tbl.RegionName == "Cavity")</code>), and KelvinK does
+          the same.</li>
+        <li><b>The kiln's heat source has also changed upstream:</b> current
+          <code>main.m</code> uses 5×10⁵ W/m³ for 8 hours when "Kiln" is selected —
+          not the 120,000 W/m³ / 6h from <code>setup.txt</code>, which is now stale
+          documentation.</li>
+        <li><b>KelvinK's kiln heat source is deliberately re-calibrated, not a
+          straight port of that value.</b> A narrow, intense source (σ=0.5) makes
+          peak_temp and spatial_non_uniform fail together almost every run — the
+          concentration that pushes the center past 1200°C is the same concentration
+          that blows the cavity's spatial spread past 150°C. KelvinK uses a broader,
+          gentler source (σ=5.0, power tuned so the cavity's peak lands mid-band)
+          instead — verified to give 16/27 feasible designs across the full material
+          pool, with physically sensible ranking (insulating walls overshoot,
+          conductive ones vent enough to stay in-band).</li>
+      </ul>
+      <button class="btn btn-ghost btn-small" id="howCloseBtn">Close</button>
+    </dialog>
+
+    <!-- CONFIGURATION DIALOG — mirrors GUIConfig.m's tabs and defaults -->
+    <dialog id="configDialog" class="config-dialog">
+      <div class="config-head">
+        <h3>KelvinK – Configuration</h3>
+        <button class="config-x" id="configCloseBtn" aria-label="Close">&times;</button>
+      </div>
+
+      <div class="config-presets">
+        <span>Quick-fill:</span>
+        <button class="btn btn-ghost btn-small" id="presetCoolingBtn">Case Study 1 — Cooling Room</button>
+        <button class="btn btn-ghost btn-small" id="presetKilnBtn">Case Study 2 — Kiln</button>
+        <button class="btn btn-ghost btn-small" id="presetDefaultBtn">GUIConfig defaults</button>
+      </div>
+
+      <div class="config-tabbar">
+        <button class="config-tab active" data-tab="geometry">Geometry</button>
+        <button class="config-tab" data-tab="simulation">Simulation</button>
+        <button class="config-tab" data-tab="experiments">Materials</button>
+        <button class="config-tab" data-tab="constraints">Constraints</button>
+      </div>
+
+      <div class="config-body">
+
+        <!-- TAB 1: Geometry & Grid -->
+        <div class="config-panel active" data-panel="geometry">
+          <div class="config-row">
+            <label for="cfgWidth">Room Width (m):</label>
+            <input type="number" id="cfgWidth" value="1" step="0.1" min="0.1" />
+          </div>
+          <div class="config-row">
+            <label for="cfgHeight">Room Height (m):</label>
+            <input type="number" id="cfgHeight" value="1" step="0.1" min="0.1" />
+          </div>
+          <div class="config-row">
+            <label for="cfgNX">Grid Resolution X (NX):</label>
+            <input type="number" id="cfgNX" value="25" min="3" max="200" step="1" />
+          </div>
+          <div class="config-row">
+            <label for="cfgNY">Grid Resolution Y (NY):</label>
+            <input type="number" id="cfgNY" value="25" min="3" max="200" step="1" />
+          </div>
+          <p class="config-note">NY is captured for parity with the real dialog but — like in
+            <code>main.m</code>, which only ever passes <code>NX</code> into <code>PDEEngine</code> —
+            it isn't actually used; the solver grid is always square.</p>
+        </div>
+
+        <!-- TAB 2: Simulation -->
+        <div class="config-panel" data-panel="simulation">
+          <div class="config-row">
+            <label for="cfgSimLength">Sim Length (hours): <b id="cfgSimLengthVal">12</b></label>
+            <input type="range" id="cfgSimLength" min="1" max="72" value="12" />
+          </div>
+          <div class="config-row">
+            <label for="cfgDTHours">Time resolution (hours):</label>
+            <input type="number" id="cfgDTHours" value="0.05" step="0.005" min="0.001" />
+          </div>
+          <div class="config-row">
+            <label for="cfgSnapshotPeriod">Snapshot Period (%):</label>
+            <input type="number" id="cfgSnapshotPeriod" value="10" min="1" max="100" />
+          </div>
+          <div class="config-row">
+            <label for="cfgMaxSnapshots">Max Snapshots:</label>
+            <input type="number" id="cfgMaxSnapshots" value="48" min="2" max="48" />
+          </div>
+          <div class="config-row config-row-inline">
+            <label for="cfgOptimize">Enable Optimization:</label>
+            <input type="checkbox" id="cfgOptimize" checked />
+          </div>
+          <p class="config-note">Defaulted on here (the real dialog defaults it off) — KelvinK's
+            dashboard needs the ranked output to show anything. Matches <code>main.m</code>'s
+            <code>if (OPTIMIZE)</code> gate otherwise.</p>
+          <div class="config-row">
+            <label for="cfgMetricsFamily">Metrics Family:</label>
+            <select id="cfgMetricsFamily">
+              <option value="cooling">Cooling Chamber</option>
+              <option value="kiln">Kiln</option>
+            </select>
+          </div>
+          <p class="config-note">Matches <code>ConfigTabSimulation.m</code>'s real "Metrics Family"
+            dropdown — <code>config.m</code> picks <code>PERFORMANCE_METRICS_COOLING</code> or
+            <code>_KILN</code> from this exact field.</p>
+        </div>
+
+        <!-- TAB 3: Experiments Pool -->
+        <div class="config-panel" data-panel="experiments">
+          <div class="config-row">
+            <label for="cfgMaxExperiments">Max Experiments:</label>
+            <input type="number" id="cfgMaxExperiments" value="2" min="1" max="1000" />
+          </div>
+          <div class="config-row">
+            <label for="cfgTechnique">Design Technique:</label>
+            <select id="cfgTechnique">
+              <option value="Monte Carlo">Monte Carlo</option>
+              <option value="First N">First N</option>
+            </select>
+          </div>
+          <div class="config-row">
+            <label for="cfgFamilyFilter">Quick Select Family:</label>
+            <select id="cfgFamilyFilter"></select>
+          </div>
+
+          <div class="ashby-block">
+            <div class="config-row">
+              <label for="cfgAshbyPreset">Ashby Auto-Screening:</label>
+              <select id="cfgAshbyPreset">
+                <option value="none">None (Manual Selection)</option>
+                <option value="cool_outer">Passive Cooling Outer Wall (1/α)</option>
+                <option value="cool_inner">Passive Cooling Inner Wall (ρ·cp)</option>
+                <option value="kiln_outer">Kiln Outer Envelope (1/√(k·ρ·cp))</option>
+                <option value="kiln_inner">Kiln Inner Refractory (√(k·ρ·cp))</option>
+                <option value="radiative_cost">Radiative Cost Efficiency (ε/cost)</option>
+              </select>
+            </div>
+            <div class="config-row">
+              <label for="cfgAshbyTopN">Ashby Top N Candidates:</label>
+              <input type="number" id="cfgAshbyTopN" value="4" min="1" max="58" />
+            </div>
+            <p class="config-note" id="ashbyPresetInfo" hidden></p>
+            <div class="ashby-chart-wrap" id="ashbyChartWrap" hidden>
+              <canvas id="ashbyChart" height="320"></canvas>
+              <div class="ashby-legend" id="ashbyLegend"></div>
+            </div>
+          </div>
+
+          <div class="config-row config-row-materials">
+            <label>Select Pool Materials: <span id="poolCountLabel" style="color:var(--text-dim);font-weight:400;"></span></label>
+            <div class="material-checklist" id="poolMaterialsList"></div>
+          </div>
+        </div>
+
+        <!-- TAB 4: Constraints -->
+        <div class="config-panel" data-panel="constraints">
+          <div class="config-row config-row-inline">
+            <input type="checkbox" id="cfgFreeDesign" checked />
+            <label for="cfgFreeDesign">Free Design (No Fixed Region)</label>
+          </div>
+          <fieldset class="config-fixed-panel" id="fixedRegionPanel" disabled>
+            <legend>Fixed Region Settings</legend>
+            <div class="config-row">
+              <label>Target Region:</label>
+              <div class="radio-list" id="targetRegionList">
+                <label><input type="radio" name="targetRegion" value="1" checked /> Outer_Wall 1</label>
+                <label><input type="radio" name="targetRegion" value="2" /> Inner_Wall 2</label>
+                <label><input type="radio" name="targetRegion" value="3" /> Interior 3</label>
+              </div>
+            </div>
+            <div class="config-row config-row-materials">
+              <label>Target Material:</label>
+              <div class="radio-list" id="targetMaterialList"></div>
+            </div>
+          </fieldset>
+        </div>
+
+      </div>
+
+      <button class="config-apply" id="applyRunBtn">Apply &amp; Run</button>
+    </dialog>
+
+    <!-- RESULTS -->
+    <section class="results" id="results" hidden>
+
+      <div class="summary-row">
+        <div class="summary-card">
+          <span class="summary-label">Designs tested</span>
+          <span class="summary-value" id="statTotal">—</span>
+        </div>
+        <div class="summary-card">
+          <span class="summary-label">Feasible</span>
+          <span class="summary-value" id="statFeasible">—</span>
+        </div>
+        <div class="summary-card">
+          <span class="summary-label">Best score</span>
+          <span class="summary-value" id="statBestScore">—</span>
+        </div>
+        <div class="summary-card">
+          <span class="summary-label">Score spread (top 25)</span>
+          <span class="summary-value" id="statSpread">—</span>
+        </div>
+        <button class="btn btn-primary btn-small" id="downloadResultsBtn" hidden>Download results</button>
+        <button class="btn btn-ghost btn-small" id="loadAnotherBtn">Load another file</button>
+      </div>
+
+      <div class="podium" id="podium"></div>
+
+      <div class="panel-grid">
+        <div class="panel panel-chart">
+          <div class="panel-head">
+            <h3>Score by rank</h3>
+            <span class="panel-sub">Click a bar to inspect that design</span>
+          </div>
+          <canvas id="scoreChart" height="140"></canvas>
+        </div>
+
+        <div class="panel panel-detail" id="detailPanel">
+          <div class="panel-head">
+            <h3>Design detail</h3>
+            <span class="panel-sub" id="detailSub">Select a row or bar</span>
+          </div>
+          <div class="detail-body" id="detailBody">
+            <p class="detail-empty">Nothing selected yet.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel panel-table">
+        <div class="panel-head">
+          <h3>All designs</h3>
+          <input type="text" id="searchBox" placeholder="Search materials…" class="search-box" />
+        </div>
+        <div class="table-scroll">
+          <table id="resultsTable">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <footer>
+    <span>KelvinK runs the simulation and ranking in your browser, or reads a MATLAB-exported <code>optimization_results.csv</code> — either way, nothing leaves your browser.</span>
+  </footer>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
